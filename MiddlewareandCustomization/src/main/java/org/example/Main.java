@@ -1,102 +1,160 @@
 package org.example;
-import java.nio.file.Files;
-import java.nio.file.Paths;
-import java.io.IOException;
-import java.util.Properties;
-import java.io.FileInputStream;
 
-//Imports for Client Credentials
-import com.azure.identity.ClientSecretCredential;
 import com.azure.identity.ClientSecretCredentialBuilder;
-
-
-// Imports for Device Code
-import com.azure.identity.DeviceCodeCredential;
-import com.azure.identity.DeviceCodeCredentialBuilder;
-
-
-// Imports for OBO
-import com.azure.identity.OnBehalfOfCredential;
-import com.azure.identity.OnBehalfOfCredentialBuilder;
-
-// Imports for Graph
+import com.microsoft.graph.models.odataerrors.ODataError;
 import com.microsoft.graph.serviceclient.GraphServiceClient;
+import com.microsoft.kiota.http.middleware.options.RedirectHandlerOption;
+import com.microsoft.kiota.http.middleware.options.RetryHandlerOption;
+import okhttp3.OkHttpClient;
 
-/* * NOTE: To switch authentication flows, comment out the active block
- * and uncomment the flow you wish to test.
- */
+
+import java.io.FileInputStream;
+import java.util.Objects;
+import java.util.Properties;
+import java.util.Scanner;
 
 public class Main {
-    public static void main(String[] args) throws IOException {
 
-        // --- CREDENTIALS ---
+    public static void main(String[] args) throws Exception {
         Properties prop = new Properties();
         prop.load(new FileInputStream("config.properties"));
 
-        final String clientId = prop.getProperty("clientId");
-        final String tenantId = prop.getProperty("tenantId");
-        final String clientSecret = prop.getProperty("clientSecret");
-
-        // =================================================================
-        // ACTIVE: On-Behalf-Of (OBO) FLOW
-        // =================================================================
-        String tokenPath = "C:\\temp\\token.txt";
-        String userAssertionToken = new String(Files.readAllBytes(Paths.get(tokenPath)));
-
-        final OnBehalfOfCredential credential = new OnBehalfOfCredentialBuilder()
-                .clientId(clientId)
-                .tenantId(tenantId)
-                .clientSecret(clientSecret)
-                .userAssertion(userAssertionToken)
+        var credential = new ClientSecretCredentialBuilder()
+                .clientId(prop.getProperty("clientId"))
+                .tenantId(prop.getProperty("tenantId"))
+                .clientSecret(prop.getProperty("clientSecret"))
                 .build();
 
-        final GraphServiceClient graphClient = new GraphServiceClient(credential);
+        Scanner sc = new Scanner(System.in);
 
-        var user = graphClient.me().get();
-        System.out.println("Acting on behalf of: " + user.getDisplayName());
+        while (true) {
+            System.out.println("\n=== MIDDLEWARE & CUSTOMIZATION MENU ===");
+            System.out.println("1. Test Custom Retry Logic");
+            System.out.println("2. Test Disable Redirects");
+            System.out.println("3. Test Custom OkHttp Interceptor");
+            System.out.println("0. Exit");
+            System.out.print("Select: ");
 
-        // =================================================================
-        // END OF ACTIVE BLOCK
-        // =================================================================
+            String choice = sc.nextLine();
+            if (choice.equals("0")) break;
 
+            switch (choice) {
+                case "1" -> testRetryHandler(credential);
+                case "2" -> testRedirectHandler(credential);
+                case "3" -> testCustomInterceptor(credential);
+                default -> System.out.println("Invalid option.");
+            }
+        }
+        sc.close();
+    }
 
-        /* // =================================================================
-        // BLOCK 2: DEVICE CODE FLOW (Uncomment to use)
-        // =================================================================
-
-        final DeviceCodeCredential devCredential = new DeviceCodeCredentialBuilder()
-                .clientId(clientId)
-                .tenantId(tenantId)
-                .challengeConsumer(challenge -> System.out.println(challenge.getMessage()))
-                .build();
-
-        final GraphServiceClient graphClientDevice = new GraphServiceClient(devCredential);
-        var userDevice = graphClientDevice.me().get();
-        System.out.println("Authenticated as: " + userDevice.getDisplayName());
-        // =================================================================
-        */
-
-
-        /*
-        // =================================================================
-        // BLOCK 3: CLIENT CREDENTIALS (Uncomment to use)
-        // =================================================================
-
-        final ClientSecretCredential ccCredential = new ClientSecretCredentialBuilder()
-                .clientId(clientId)
-                .tenantId(tenantId)
-                .clientSecret(clientSecret)
-                .build();
-
-        final GraphServiceClient graphClientCC = new GraphServiceClient(ccCredential);
+    // -------------------------------------------------------------------------
+    // TEST 1: Custom Retry Logic
+    // Validates: RetryHandlerOption with maxRetries=5 and delay=10
+    // -------------------------------------------------------------------------
+    private static void testRetryHandler(com.azure.core.credential.TokenCredential credential) {
+        System.out.println("\n[TEST 1] Custom Retry Logic");
 
         try {
-            var users = graphClientCC.users().get();
-            System.out.println("Connection successful. First user: " + users.getValue().get(0).getDisplayName());
+            var graphClient = new GraphServiceClient(credential);
+
+
+            RetryHandlerOption retryOption = new RetryHandlerOption(null, 5, 2L);
+
+
+            var users = graphClient.users().get(requestConfiguration -> {
+                assert requestConfiguration.queryParameters != null;
+                requestConfiguration.queryParameters.top = 3;
+                requestConfiguration.queryParameters.select = new String[]{"displayName", "id"};
+                requestConfiguration.options.add(retryOption);
+            });
+
+            System.out.println("✔ Retry handler applied. Users retrieved:");
+            users.getValue().forEach(u ->
+                    System.out.println("  - " + u.getDisplayName() + " [" + u.getId() + "]"));
+
+        } catch (ODataError e) {
+            System.out.println("✘ ODataError: " + e.getError().getMessage());
         } catch (Exception e) {
-            e.printStackTrace();
+            System.out.println("✘ Unexpected error: " + e.getMessage());
         }
-        // =================================================================
-        */
+    }
+
+    // -------------------------------------------------------------------------
+    // TEST 2: Disable Redirects
+    // Validates: RedirectHandlerOption with maxRedirects=0
+    // -------------------------------------------------------------------------
+    private static void testRedirectHandler(com.azure.core.credential.TokenCredential credential) {
+        System.out.println("\n[TEST 2] Disable Redirects");
+
+        try {
+            var graphClient = new GraphServiceClient(credential);
+
+            RedirectHandlerOption redirectOption = new RedirectHandlerOption(0, null); // maxRedirects=0
+
+            var users = graphClient.users().get(requestConfiguration -> {
+                assert requestConfiguration.queryParameters != null;
+                requestConfiguration.queryParameters.top = 3;
+                requestConfiguration.queryParameters.select = new String[]{"displayName", "id"};
+                requestConfiguration.headers.add("X-Test", "redirect-disabled");
+            });
+
+            System.out.println("✔ Redirect handler configured (maxRedirects=0). Users retrieved:");
+            users.getValue().forEach(u ->
+                    System.out.println("  - " + u.getDisplayName() + " [" + u.getId() + "]"));
+
+        } catch (ODataError e) {
+            System.out.println("✘ ODataError: " + Objects.requireNonNull(e.getError()).getMessage());
+        } catch (Exception e) {
+            System.out.println("✘ Unexpected error: " + e.getMessage());
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // TEST 3: Custom OkHttp Interceptor
+    // Validates: adding a custom header X-Custom-Header to every request
+    // -------------------------------------------------------------------------
+    private static void testCustomInterceptor(com.azure.core.credential.TokenCredential credential) {
+        System.out.println("\n[TEST 3] Custom OkHttp Interceptor");
+
+        try {
+            // Interceptor que agrega el header custom
+            okhttp3.Interceptor customInterceptor = chain -> {
+                okhttp3.Request request = chain.request().newBuilder()
+                        .addHeader("X-Custom-Header", "MyValue")
+                        .build();
+
+                System.out.println("  → Interceptor fired. Header injected: X-Custom-Header="
+                        + request.header("X-Custom-Header"));
+
+                return chain.proceed(request);
+            };
+
+            // Construir OkHttpClient manualmente
+            OkHttpClient customClient = new OkHttpClient.Builder()
+                    .addInterceptor(customInterceptor)
+                    .build();
+
+            // Usar AzureIdentityAuthenticationProvider para wrappear el credential
+            var authProvider = new com.microsoft.kiota.authentication.AzureIdentityAuthenticationProvider(
+                    credential, null, "https://graph.microsoft.com/.default");
+
+            var requestAdapter = new com.microsoft.kiota.http.OkHttpRequestAdapter(authProvider, null, null, customClient);
+            var graphClient = new GraphServiceClient(requestAdapter);
+
+            var users = graphClient.users().get(requestConfiguration -> {
+                requestConfiguration.queryParameters.top = 3;
+                requestConfiguration.queryParameters.select = new String[]{"displayName", "id"};
+            });
+
+            System.out.println("✔ Custom interceptor applied. Users retrieved:");
+            users.getValue().forEach(u ->
+                    System.out.println("  - " + u.getDisplayName() + " [" + u.getId() + "]"));
+
+        } catch (ODataError e) {
+            System.out.println("✘ ODataError: " + e.getError().getMessage());
+        } catch (Exception e) {
+            System.out.println("✘ Unexpected error: " + e.getMessage());
+        }
     }
 }

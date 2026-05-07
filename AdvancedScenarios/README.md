@@ -1,70 +1,94 @@
-# Azure Identity for Java - Training Lab
+# Middleware & Customization
 
-This repository is a hands-on lab environment designed to practice and master **Microsoft Entra ID** and **Microsoft Graph API** authentication flows using Java.
+This module explores how to customize the **Microsoft Graph Java SDK's internal pipeline** — the layer between your code and the actual HTTP call. All three examples validate that you can modify SDK behavior without touching its source code.
 
-## 🚀 Purpose
-The goal is to implement and test OAuth 2.0 authentication flows safely, focusing on enterprise-level integration best practices.
+---
 
-## 🛠️ Authentication Flows Included
+## 🔍 What's Covered
 
-### On-Behalf-Of (OBO) Flow:
-Perfect for backend services acting on behalf of a user.
+### 1. Custom Retry Logic
+By default, the SDK retries failed requests (e.g., 429 Too Many Requests) up to 3 times. This test overrides that to 5 retries with a 2-second delay between attempts.
 
-**Requirements:**
-- Two App Registrations: One for the Frontend (Client) and one for the Backend (API).
+The retry never triggers under normal conditions — the point is confirming the configuration is applied correctly without breaking the call.
 
-- Backend App must Expose an API and define a specific scope.
+```java
+RetryHandlerOption retryOption = new RetryHandlerOption(null, 5, 2L);
 
-- Backend App must explicitly pre-authorize the Frontend App client ID in the Authorized client applications section.
+graphClient.users().get(requestConfiguration -> {
+    requestConfiguration.options.add(retryOption);
+});
+```
 
-- Java app requires an incoming User Access Token (the assertion) to exchange for a new, valid Graph-scoped token.
+---
 
+### 2. Disable Redirects
+When Graph returns a 302 redirect, the SDK follows it automatically. Setting `maxRedirects=0` disables that behavior — useful for security audits or when you want to handle redirects manually.
 
-### Client Credentials Flow:
-Used for daemon services, background tasks, or server-to-server communication where no user presence is required or available.
+```java
+RedirectHandlerOption redirectOption = new RedirectHandlerOption(0, null);
 
-**Requirements:**
+graphClient.users().get(requestConfiguration -> {
+    requestConfiguration.options.add(redirectOption);
+});
+```
 
-- App Registration must be configured with Application Permissions (not Delegated permissions).
+---
 
-- Administrator consent must be granted in the Azure portal for the requested API permissions.
+### 3. Custom OkHttp Interceptor
+The SDK uses OkHttp under the hood for all HTTP calls. An interceptor runs on every request before it leaves the application — think of it as a global filter.
 
-- A valid Client Secret or Certificate must be configured in the App Registration.
+This example injects a custom header into every request automatically, without modifying individual calls. In production this pattern is used for correlation IDs, audit headers, or additional tokens.
 
-- Java app uses the ClientSecretCredential, which authenticates the application itself rather than a user.
+```java
+OkHttpClient customClient = new OkHttpClient.Builder()
+    .addInterceptor(chain -> {
+        Request request = chain.request().newBuilder()
+            .addHeader("X-Custom-Header", "MyValue")
+            .build();
+        return chain.proceed(request);
+    })
+    .build();
 
+var requestAdapter = new OkHttpRequestAdapter(authProvider, null, null, customClient);
+var graphClient = new GraphServiceClient(requestAdapter);
+```
 
+---
 
-### Device Code Flow:
+## ⚙️ Running Locally
 
-Used for input-constrained devices, CLI tools, or terminals where the user cannot log in via a browser directly inside the application.
-
-**Requirements:**
-
-- App Registration configured as a Public Client/Native application.
-
-- Allow public client flows enabled in the Authentication settings of the portal.
-
-- Java app requires a challenge consumer to capture and print the authentication URL and user code so the user can sign in on a separate device.
-
-## ⚠️ Security Note
-This project **DOES NOT** contain real credentials. Never upload files containing secrets (e.g., `.env`, `config.properties`, `token.txt`) to GitHub. I have configured a `.gitignore` file to ensure these remain local.
-
-## ⚙️ Local Configuration
-1. Clone the repository: `git clone <your-repo-url>`
-2. Create a `config.properties` file in the root directory:
-
+1. Add a `config.properties` file in this module's root folder:
    ```properties
    clientId=YOUR_CLIENT_ID
    tenantId=YOUR_TENANT_ID
-   clientSecret=YOUR_CLIENT_SECRET 
+   clientSecret=YOUR_CLIENT_SECRET
    ```
-3. Ensure config.properties is included in your .gitignore file.
 
-## 📚 Resources
+2. Set the **Working Directory** in IntelliJ to this module's folder:
+   ```
+   C:\Users\aslym\ProjectsJava\GraphFlows\MiddlewareandCustomization
+   ```
 
-[Microsoft Graph Java SDK Documentation](https://learn.microsoft.com/en-us/graph/sdks/create-requests?tabs=java)
+3. Run `Main.java` and select an option from the menu:
+   ```
+   === MIDDLEWARE & CUSTOMIZATION MENU ===
+   1. Test Custom Retry Logic
+   2. Test Disable Redirects
+   3. Test Custom OkHttp Interceptor
+   0. Exit
+   ```
 
-[Azure Identity Library for Java](https://learn.microsoft.com/en-us/java/api/overview/azure/identity-readme?view=azure-java-stable)
+---
 
+## 🗒️ Notes
 
+- **Per-Request vs Global config**: Using `requestConfiguration.options` affects only that specific call. Passing a custom `OkHttpClient` to the `GraphServiceClient` affects every call globally.
+- **Interceptor order matters**: Authentication happens early in the pipeline. Custom interceptors run after the `AuthenticationHandler`, so the token is already attached when your interceptor fires.
+- **Avoid blocking** `chain.proceed()`: If your interceptor never calls it, the SDK will hang indefinitely.
+
+---
+
+## 📚 References
+
+- [Customize the Graph Client (Java)](https://learn.microsoft.com/en-us/graph/sdks/customize-client?tabs=java)
+- [OkHttp Interceptors](https://square.github.io/okhttp/features/interceptors/)
