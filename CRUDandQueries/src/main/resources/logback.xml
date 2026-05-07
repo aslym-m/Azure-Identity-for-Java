@@ -1,0 +1,18 @@
+<configuration>
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss} [%level] %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- Logs de las llamadas HTTP de Kiota/Graph -->
+    <logger name="com.microsoft.kiota" level="DEBUG"/>
+    <logger name="com.microsoft.graph" level="DEBUG"/>
+
+    <!-- Logs de Azure Identity (autenticación) -->
+    <logger name="com.azure.identity" level="DEBUG"/>
+    <logger name="com.azure.core" level="WARN"/>
+    <root level="WARN">
+        <appender-ref ref="STDOUT"/>
+    </root>
+</configuration>
